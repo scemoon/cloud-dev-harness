@@ -105,7 +105,7 @@ class SessionsScreen(ModalScreen[str]):
 
     async def action_new_session(self) -> None:
         session_details = await self.app.new_session_screen(
-            lambda: self.app.SessionScreen()
+            lambda: self.app.get_main_screen()
         )
         self.dismiss(session_details.mode_name)
 
