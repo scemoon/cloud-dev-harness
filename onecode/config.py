@@ -369,6 +369,11 @@ _PROVIDER_DEFAULT_TEMPLATES: dict = {
         "endpoint": "https://open.bigmodel.cn/api/paas/v4",
         "models": ["glm-5.1", "glm-5"],
     },
+    "openai-custom": {
+        "api_key": "${OPENAI_CUSTOM_API_KEY}",
+        "endpoint": "https://api.openai.com/v1",
+        "models": [],
+    },
 }
 
 
