@@ -104,10 +104,7 @@ class SessionsScreen(ModalScreen[str]):
         self.notify(f"Deleted session: {title}")
 
     async def action_new_session(self) -> None:
-        session_details = await self.app.new_session_screen(
-            lambda: self.app.get_main_screen()
-        )
-        self.dismiss(session_details.mode_name)
+        self.dismiss("new-session")
 
     async def _load_historical_sessions(self) -> None:
         seen_pks: set[int] = set()
@@ -147,8 +144,8 @@ class SessionsScreen(ModalScreen[str]):
 
         self.session_grid_select.set_sessions(merged)
 
-    def on_mount(self) -> None:
-        self.run_worker(self._load_historical_sessions())
+    async def on_mount(self) -> None:
+        await self._load_historical_sessions()
 
     async def _on_screen_resume(self, event: ScreenResume) -> None:
         await self._load_historical_sessions()

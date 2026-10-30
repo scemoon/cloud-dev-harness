@@ -267,12 +267,19 @@ class IdeScreen(ModalScreen[None]):
         for child in list(editor_panel.children):
             child.remove()
 
-        text_area = TextArea(
-            content,
-            language=lang,
-            show_line_numbers=True,
-            soft_wrap=False,
-        )
+        try:
+            text_area = TextArea(
+                content,
+                language=lang if lang else None,
+                show_line_numbers=True,
+                soft_wrap=False,
+            )
+        except Exception:
+            text_area = TextArea(
+                content,
+                show_line_numbers=True,
+                soft_wrap=False,
+            )
         editor_panel.mount(text_area)
         text_area.focus()
         self._update_header()

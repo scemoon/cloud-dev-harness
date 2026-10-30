@@ -217,7 +217,6 @@ See on-screen instructions for details.
         )
 
     QUICK_COUNT_SAMPLE = 1000
-    HUGE_PASTE_THRESHOLD = 100000
 
     async def _on_paste(self, event: events.Paste) -> None:
         """Handle paste events with fast path for large text to avoid blocking UI."""
@@ -228,19 +227,8 @@ See on-screen instructions for details.
         MAX_PASTE_CHARS = 50000
 
         if text_len > MAX_PASTE_CHARS:
-            self.post_message(
-                messages.Flash(
-                    "内容过大，已截断",
-                    style="warning",
-                    duration=3,
-                )
-            )
-            self._paste_fingerprint = ""
-            self._paste_queue.clear()
-            text_copy = event.text[:MAX_PASTE_CHARS]
-            self._paste_queue.append((text_copy, "[Pasted large content]"))
-            self.insert("[Pasted large content] ")
-            return
+            cursor = self.cursor_location
+            return self._replace_via_keyboard(event.text, cursor, cursor)
 
         await super()._on_paste(event)
 
@@ -253,7 +241,6 @@ See on-screen instructions for details.
 
         if text_len > MAX_PASTE_CHARS:
             self._paste_fingerprint = ""
-            self._paste_queue.clear()
             sample = text[: self.QUICK_COUNT_SAMPLE]
             sample_lines = sample.count("\n") + 1
             estimated_line_count = int(sample_lines * text_len / len(sample))
@@ -267,23 +254,20 @@ See on-screen instructions for details.
                 )
             )
             self.insert(marker + " ")
-            return None
+            return True
 
         fingerprint = text.replace("\r\n", "\n").replace("\r", "\n").strip()
 
         if fingerprint and self._paste_fingerprint == fingerprint:
             self._paste_fingerprint = ""
-            self._paste_queue.clear()
             return None
 
         if text_len <= 150:
             self._paste_fingerprint = ""
-            self._paste_queue.clear()
             return super()._replace_via_keyboard(text, start, end)
 
         if not self._paste_summary_enabled:
             self._paste_fingerprint = ""
-            self._paste_queue.clear()
             return super()._replace_via_keyboard(text, start, end)
 
         self._paste_fingerprint = fingerprint

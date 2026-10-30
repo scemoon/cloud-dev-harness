@@ -204,7 +204,7 @@ class TestPasteMarkerFormat:
 
 def normalize_paste_text(text: str) -> str:
     """Canonical normalization used for paste dedup comparison."""
-    return text.replace('\r\n', '\n').replace('\r', '\n').strip()
+    return text.replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
 class TestDedupNormalization:
@@ -220,7 +220,9 @@ class TestDedupNormalization:
         """Text with trailing newline matches text without after normalization."""
         with_newline = "line1\nline2\n"
         without_newline = "line1\nline2"
-        assert normalize_paste_text(with_newline) == normalize_paste_text(without_newline)
+        assert normalize_paste_text(with_newline) == normalize_paste_text(
+            without_newline
+        )
 
     def test_trailing_newlines_stripped(self) -> None:
         """Multiple trailing newlines are stripped."""
@@ -250,7 +252,9 @@ class TestDedupNormalization:
     def test_normalization_does_not_remove_internal_whitespace(self) -> None:
         """Internal spaces and tabs are preserved."""
         text = "line 1\n\tline 2\n  line 3"
-        assert normalize_paste_text(text) == text.replace('\r\n', '\n').replace('\r', '\n')
+        assert normalize_paste_text(text) == text.replace("\r\n", "\n").replace(
+            "\r", "\n"
+        )
 
     def test_single_line_with_crlf(self) -> None:
         """Single line with CRLF normalizes correctly."""
@@ -260,3 +264,196 @@ class TestDedupNormalization:
         """Normalization preserves actual content, only changes line endings."""
         original = "line1\nline2\nline3"
         assert normalize_paste_text(original) == original
+
+
+class TestReplaceViaKeyboardQueuePreservation:
+    """Regression tests for the bug where _replace_via_keyboard cleared
+    _paste_queue whenever it was triggered by anything other than a fresh
+    summary-eligible paste (e.g. typing a single character, pasting small
+    content, dedup, summary-disabled path). The marker was still in the
+    document but its (original, marker) entry was lost, so submission sent
+    the literal "[Pasted ~N lines]" instead of the original content.
+    """
+
+    def _drive(self, setup):
+        """Mount a PromptTextArea in a minimal app, run ``setup(widget)``
+        inside the running pilot context, then return the widget together
+        with a log of every text passed to ``self.insert``.
+        """
+        import asyncio
+        from types import SimpleNamespace
+
+        from textual.app import App
+        from textual.containers import Container
+
+        from tui.widgets.prompt import PromptTextArea
+
+        # The widget declares ``app = getters.app(A2TUIApp)`` which asserts
+        # at runtime that the active app is an A2TUIApp instance. Relax
+        # that check so we can mount the widget under a bare probe app.
+        app_descriptor = PromptTextArea.__dict__["app"]
+        original_app_type = app_descriptor._app_type
+        app_descriptor._app_type = App
+
+        state: dict[str, object] = {}
+
+        class _ProbeApp(App):
+            settings = SimpleNamespace(get=lambda _key, _t=bool: False)
+
+            def compose(self):
+                widget = PromptTextArea()
+                state["widget"] = widget
+                with Container():
+                    yield widget
+
+        try:
+
+            async def _run():
+                app = _ProbeApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    widget = state["widget"]
+                    inserted: list[str] = []
+                    flashes: list[object] = []
+
+                    real_insert = widget.insert
+
+                    def _spy_insert(text, *args, **kwargs):
+                        inserted.append(text)
+                        return real_insert(text, *args, **kwargs)
+
+                    widget.insert = _spy_insert  # type: ignore[method-assign]
+                    widget._paste_queue = []
+                    widget._paste_fingerprint = ""
+                    widget._paste_summary_enabled = True
+                    widget.update_suggestion = lambda: None  # type: ignore[method-assign]
+
+                    real_post = widget.post_message
+
+                    def _spy_post(message):
+                        flashes.append(message)
+                        return real_post(message)
+
+                    widget.post_message = _spy_post  # type: ignore[method-assign]
+
+                    setup(widget)
+
+                    state["inserted"] = inserted
+                    state["flashes"] = flashes
+                    state["widget"] = widget
+
+            asyncio.run(_run())
+            return state
+        finally:
+            app_descriptor._app_type = original_app_type
+
+    def test_queue_survives_typing_after_paste(self) -> None:
+        """Typing a single character after a summary paste must not clear
+        the queue. Previously this caused chat to display the marker text
+        instead of the original pasted content on submit.
+        """
+        original = "line1\nline2\nline3"
+        marker = "[Pasted ~3 lines]"
+
+        def setup(widget):
+            widget._paste_queue.append((original, marker))
+            widget._paste_fingerprint = original
+            widget._replace_via_keyboard("x", (0, 0), (0, 0))
+
+        state = self._drive(setup)
+        assert state["widget"]._paste_queue == [(original, marker)]
+
+    def test_queue_survives_small_paste_after_large(self) -> None:
+        """Pasting a small chunk after a summary-eligible paste must not
+        wipe the prior (original, marker) entry.
+        """
+        original = "alpha\nbeta\ngamma"
+        marker = "[Pasted ~3 lines]"
+
+        def setup(widget):
+            widget._paste_queue.append((original, marker))
+            widget._paste_fingerprint = original
+            widget._replace_via_keyboard("ok", (0, 0), (0, 0))
+
+        state = self._drive(setup)
+        assert state["widget"]._paste_queue == [(original, marker)]
+
+    def test_queue_survives_dedup_paste(self) -> None:
+        """When the same content is pasted twice (dedup path), the
+        already-inserted marker must still expand on submit.
+        """
+        original = "repeat\nme"
+        marker = "[Pasted ~2 lines]"
+
+        def setup(widget):
+            widget._paste_queue.append((original, marker))
+            widget._paste_fingerprint = original
+            widget._replace_via_keyboard(original, (0, 0), (0, 0))
+
+        state = self._drive(setup)
+        assert state["widget"]._paste_queue == [(original, marker)]
+
+    def test_queue_survives_summary_disabled_paste(self) -> None:
+        """When summary is disabled at runtime, a fresh paste should not
+        wipe out past summary-eligible markers from the queue.
+        """
+        original = "first\npaste\nthat\nwas\nsummarized"
+        marker = "[Pasted ~5 lines]"
+
+        def setup(widget):
+            widget._paste_queue.append((original, marker))
+            widget._paste_fingerprint = original
+            widget._paste_summary_enabled = False
+            widget._replace_via_keyboard("another\npaste", (0, 0), (0, 0))
+
+        state = self._drive(setup)
+        assert state["widget"]._paste_queue[0] == (original, marker)
+
+    def test_queue_grows_when_huge_paste_follows_summary(self) -> None:
+        """A subsequent huge paste should append a new entry rather than
+        discarding the prior summary entry, so both expand on submit.
+        """
+        original = "first\npaste"
+        marker = "[Pasted ~2 lines]"
+
+        def setup(widget):
+            widget._paste_queue.append((original, marker))
+            widget._paste_fingerprint = original
+            widget._replace_via_keyboard("x" * 60000, (0, 0), (0, 0))
+
+        state = self._drive(setup)
+        widget = state["widget"]
+        assert len(widget._paste_queue) == 2
+        assert widget._paste_queue[0] == (original, marker)
+        second_original, second_marker = widget._paste_queue[1]
+        assert second_marker.startswith("[Pasted ~")
+        assert "(truncated)" in second_marker
+        assert len(second_original) == 50000
+
+    def test_summary_paste_keeps_marker_in_text(self) -> None:
+        """End-to-end smoke: after a summary-eligible paste, both the
+        marker is in the text and the queue has the entry, so a follow-up
+        expand reproduces the original content verbatim.
+        """
+        body_text = (
+            "alpha one alpha one alpha one alpha one alpha one alpha one\n"
+            "beta two beta two beta two beta two beta two beta two beta two\n"
+            "gamma three gamma three gamma three gamma three gamma three\n"
+            "delta four delta four delta four delta four delta four delta\n"
+        )
+
+        def setup(widget):
+            widget._replace_via_keyboard(body_text, (0, 0), (0, 0))
+
+        state = self._drive(setup)
+        widget = state["widget"]
+        inserted = state["inserted"]
+
+        assert len(widget._paste_queue) == 1
+        original, marker = widget._paste_queue[0]
+        assert any(marker in text for text in inserted)
+        assert expand_paste_markers(inserted[-1], widget._paste_queue) == inserted[
+            -1
+        ].replace(  # noqa: E501
+            marker, original, 1
+        )

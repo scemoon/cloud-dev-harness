@@ -1381,6 +1381,16 @@ class AgentEngine:
             return json.dumps({"success": False, "error": f"{name} denied"})
         if perm == AgentPermission.ASK:
             return json.dumps({"success": False, "error": f"{name} requires approval", "requires_approval": True})
+        if name == "Spawn" and self._is_plan_mode():
+            agent_type = inp.get("agent_type", "general")
+            if agent_type in ("build", "solo", "general"):
+                return json.dumps({
+                    "success": False,
+                    "error": (
+                        f"Spawn({agent_type}) denied in plan mode. "
+                        "Use explore or scout for research."
+                    ),
+                })
         return None
 
     def hidden_tool_names(self) -> set[str]:
@@ -1455,17 +1465,24 @@ class AgentEngine:
             logger.warning("Failed to save plan document: %s", e)
             return None
 
-    def _plan_handoff(self, plan_path: str | None) -> None:
+    def _plan_handoff(self, plan_path: str | None) -> bool:
         """Switch from the plan agent to the execution agent after approval.
 
         Keeps the approved task list (todos) and injects the approved plan
         document into the execution agent's system context so it survives
         compaction and stays the single source of truth.
+
+        Returns True if handoff was successful, False otherwise.
         """
+        logger.info("_plan_handoff called: plan_path=%s, current_agent=%s",
+                    plan_path, self.current_agent.name)
         try:
             if self.current_agent.name != "plan":
-                return
+                logger.warning("_plan_handoff skipped: not in plan mode (current=%s)",
+                               self.current_agent.name)
+                return False
             self.set_agent("solo", keep_todos=True)
+            logger.info("_plan_handoff: agent switched to solo, context updated")
             plan_text = ""
             if plan_path:
                 try:
@@ -1489,7 +1506,9 @@ class AgentEngine:
             if not self.context.replace_system_section("<!-- APPROVED_PLAN -->", section):
                 self.context.insert_system_before_non_system(section)
         except Exception as e:
-            logger.warning("Plan handoff failed: %s", e)
+            logger.error("Plan handoff failed: %s", e, exc_info=True)
+            return False
+        return True
 
     def _react_phase_text(self, round_no: int) -> str:
         """Per-round CoT guidance header; the plan agent has its own stages."""
@@ -2869,7 +2888,8 @@ class AgentEngine:
                 }
             # Plan approved → hand off to the execution agent (keeps todos).
             if plan_submit:
-                self._plan_handoff(plan_path)
+                if not self._plan_handoff(plan_path):
+                    logger.error("Plan handoff failed but continued execution")
             # answer is a JSON string when multi-question, plain text otherwise
             try:
                 parsed = json.loads(answer)

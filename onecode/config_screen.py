@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from textual import on
-from textual.app import App, ComposeResult
+from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.reactive import var
+from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Button, Label, Static
 
@@ -130,8 +131,7 @@ Button:disabled {
 """
 
 
-class ConfigScreen(App):
-    TITLE = "CDH Configuration"
+class ConfigScreen(ModalScreen):
     CSS = CSS
 
     BINDINGS = [
@@ -141,7 +141,6 @@ class ConfigScreen(App):
         Binding("right", "go_enter", "Select"),
         Binding("enter", "confirm", "Confirm"),
         Binding("escape", "cancel", "Cancel"),
-        Binding("ctrl+q", "quit_app", "Quit"),
     ]
 
     MODE_OPTIONS = [
@@ -178,7 +177,6 @@ class ConfigScreen(App):
             with Horizontal(id="button-row"):
                 yield Button("Confirm (↵)", id="save")
                 yield Button("Cancel (ESC)", id="cancel")
-                yield Button("Quit (Ctrl+Q)", id="quit")
 
     def on_mount(self) -> None:
         self._build_menu()
@@ -337,9 +335,9 @@ class ConfigScreen(App):
         options = self._get_enum_options(key)
         if options is not None:
             val = item.value if any(v == item.value for _, v in options) else options[0][1]
-            self.push_screen(OptionPickerScreen(label, options, val), lambda v, k=key: self._on_field_edited(v, k))
+            self.app.push_screen(OptionPickerScreen(label, options, val), lambda v, k=key: self._on_field_edited(v, k))
         else:
-            self.push_screen(EditFieldScreen(label, item.value), lambda v, k=key: self._on_field_edited(v, k))
+            self.app.push_screen(EditFieldScreen(label, item.value), lambda v, k=key: self._on_field_edited(v, k))
 
     def _get_enum_options(self, key: str) -> list[tuple[str, str]] | None:
         if key == "default_mode":
@@ -450,7 +448,7 @@ class ConfigScreen(App):
         elif item.item_type == "field":
             self._edit_field(item)
         elif item.item_type == "add_model":
-            self.push_screen(EditFieldScreen("Model Name", ""), self._on_model_added)
+            self.app.push_screen(EditFieldScreen("Model Name", ""), self._on_model_added)
         elif item.item_type == "back":
             self.action_go_back()
         elif item.item_type == "skill":
@@ -461,26 +459,32 @@ class ConfigScreen(App):
     def action_cancel(self) -> None:
         if self.view != "menu":
             self.action_go_back()
-
-    def action_quit_app(self) -> None:
-        self.exit()
+        else:
+            self.dismiss()
 
     def _on_click(self, event) -> None:
         pass
 
     @on(Button.Pressed, "#save")
     def on_save(self) -> None:
-        self.notify("Configuration saved")
-        self.exit()
+        self.app.notify("Configuration saved")
+        self.dismiss()
 
     @on(Button.Pressed, "#cancel")
     def on_cancel_button(self) -> None:
-        self.exit()
+        self.dismiss()
 
     @on(Button.Pressed, "#quit")
     def on_quit(self) -> None:
-        self.exit()
+        self.dismiss()
 
 
 def main() -> None:
-    ConfigScreen().run()
+    from textual.app import App
+
+    class ConfigApp(App):
+        def on_mount(self) -> None:
+            self.push_screen(ConfigScreen())
+
+    app = ConfigApp()
+    app.run()

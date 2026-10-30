@@ -48,10 +48,14 @@ class SessionSummary(containers.VerticalGroup):
 
     def watch_current(self, current: bool) -> None:
         if (session_details := self.session_details) is not None:
+            try:
+                title = self.query_one(".title", widgets.Label)
+            except Exception:
+                return
             if current:
-                self.title.update(f"✱{session_details.title}")
+                title.update(f"✱{session_details.title}")
             else:
-                self.title.update(session_details.title)
+                title.update(session_details.title)
 
     def compose(self) -> ComposeResult:
         if (session_details := self.session_details) is not None:

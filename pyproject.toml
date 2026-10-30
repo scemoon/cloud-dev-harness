@@ -1,11 +1,12 @@
 [project]
 name = "cloud-dev-harness"
-version = "1.0.10-beta.1"
+version = "1.0.10-beta.7"
 description = "Cloud Dev Harness - cloud-native development Agent framework with A2TUI"
 requires-python = ">=3.14.2"
 dependencies = [
     "textual>=0.46.0",
     "textual[syntax]==8.2.6",
+    "tree-sitter-typescript",
     "click==8.4.0",
     "platformdirs==4.9.6",
     "rich>=13.7.0",

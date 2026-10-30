@@ -227,6 +227,12 @@ def get_sessions_screen() -> SessionsScreen:
     return SessionsScreen()
 
 
+def get_config_screen() -> Screen:
+    from onecode.config_screen import ConfigScreen
+
+    return ConfigScreen()
+
+
 def get_store_screen():
     from tui.screens.store import StoreScreen
 
@@ -242,6 +248,7 @@ class A2TUIApp(App, inherit_bindings=False):
         "settings": get_settings_screen,
         "sessions": get_sessions_screen,
         "store": get_store_screen,
+        "config": get_config_screen,
     }
     MODES = {}
     BINDING_GROUP_TITLE = "System"
@@ -1048,7 +1055,9 @@ class A2TUIApp(App, inherit_bindings=False):
     @work
     async def action_sessions(self) -> None:
         if (session_screen_name := await self.push_screen_wait("sessions")) is not None:
-            if session_screen_name.startswith("session-"):
+            if session_screen_name == "new-session":
+                await self.new_session_screen(self.get_main_screen)
+            elif session_screen_name.startswith("session-"):
                 parts = session_screen_name.split("-")
                 session_pk = int(parts[1])
                 existing_mode = self._find_mode_for_session_pk(session_pk)

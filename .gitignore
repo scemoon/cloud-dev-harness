@@ -31,3 +31,10 @@ Thumbs.db
 
 # CDH
 .cdh/
+
+# npm publish artifacts
+npm/*.tgz
+
+# stray root npm artifacts
+/package.json
+/package-lock.json

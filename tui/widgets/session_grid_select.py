@@ -132,12 +132,16 @@ class SessionGridSelect(GridSelect):
 
     def set_sessions(self, sessions: list[SessionDetails]) -> None:
         deduped: list[SessionDetails] = []
-        seen: set[int] = set()
+        seen_pks: set[int] = set()
+        seen_modes: set[str] = set()
         for session in sessions:
+            if session.mode_name in seen_modes:
+                continue
             if session.session_pk is not None:
-                if session.session_pk in seen:
+                if session.session_pk in seen_pks:
                     continue
-                seen.add(session.session_pk)
+                seen_pks.add(session.session_pk)
+            seen_modes.add(session.mode_name)
             deduped.append(session)
         self._all_sessions = deduped
         self._current_page = 0

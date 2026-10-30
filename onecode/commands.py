@@ -78,6 +78,7 @@ async def _status(conversation: "Conversation", parameters: str) -> None:
 
     lines += [
         "\n**What can I do here?**",
+        "- `/onecode:config` — open the TUI config editor",
         "- `/onecode:provider [set <name|n>]` — show / change LLM provider",
         "- `/onecode:model [set <name|n>]` — show / change LLM model",
         "- `/onecode:skill list|enable|disable|add|remove [name]`",
@@ -619,6 +620,244 @@ async def _compact(conversation: "Conversation", parameters: str) -> None:
         conversation.notify(f"Compaction failed: {e}", title="/onecode:compact", severity="error")
 
 
+# ── config ─────────────────────────────────────────────────────────────
+
+
+def _mask_api_key(v: str | None) -> str:
+    if not v:
+        return "(not set)"
+    if v.startswith("${") and v.endswith("}"):
+        return f"{v} (env ref)"
+    if len(v) <= 4:
+        return "***"
+    return v[:4] + "***" + v[-4:]
+
+
+async def _config(conversation: "Conversation", parameters: str) -> None:
+    cfg = _load_cfg()
+    parts = parameters.strip().split()
+    sub = parts[0].lower() if parts else ""
+    rest = " ".join(parts[1:]) if len(parts) > 1 else ""
+
+    if sub in ("", "tui", "screen", "edit"):
+        conversation.app.push_screen("config")
+        return
+
+    if sub == "list":
+        import yaml
+        from onecode.config import _dataclass_to_dict
+        raw = _dataclass_to_dict(cfg)
+        for pid, pcfg in raw.get("providers", {}).items():
+            if pcfg.get("api_key"):
+                pcfg["api_key"] = _mask_api_key(pcfg["api_key"])
+        await _post(conversation, "**onecode config**\n\n```yaml\n" + yaml.dump(raw, default_flow_style=False) + "```")
+        return
+
+    if sub == "mode":
+        mode_parts = rest.strip().split()
+        mode_sub = mode_parts[0].lower() if mode_parts else ""
+        if mode_sub == "get" or mode_sub == "":
+            await _post(conversation, f"**mode** = `{cfg.default_mode}`  (build | plan | solo)")
+            return
+        if mode_sub == "set":
+            if len(mode_parts) < 2:
+                conversation.notify("Usage: /onecode:config mode set <build|plan|solo>", title="/onecode:config mode set", severity="error")
+                return
+            value = mode_parts[1]
+            if value not in ("build", "plan", "solo"):
+                conversation.notify("Mode must be one of: build, plan, solo", title="/onecode:config mode set", severity="error")
+                return
+            cfg.default_mode = value
+            _save_cfg(cfg)
+            conversation.flash(f"onecode mode set to [b]{value}")
+            return
+        await _post(conversation, _HELP_CONFIG)
+        return
+
+    if sub == "model":
+        model_parts = rest.strip().split()
+        model_sub = model_parts[0].lower() if model_parts else ""
+        if model_sub == "get" or model_sub == "":
+            await _post(conversation, f"**model** = `{cfg.default_model}`")
+            return
+        if model_sub == "set":
+            if len(model_parts) < 2:
+                conversation.notify("Usage: /onecode:config model set <model-name>", title="/onecode:config model set", severity="error")
+                return
+            value = model_parts[1]
+            cfg.default_model = value
+            _save_cfg(cfg)
+            conversation.flash(f"onecode model set to [b]{value}")
+            return
+        await _post(conversation, _HELP_CONFIG)
+        return
+
+    if sub == "provider":
+        prov_parts = rest.strip().split()
+        prov_sub = prov_parts[0].lower() if prov_parts else ""
+        prov_rest = " ".join(prov_parts[1:]) if len(prov_parts) > 1 else ""
+
+        if prov_sub in ("", "get"):
+            await _post(conversation, f"**provider** = `{cfg.default_provider}`")
+            return
+
+        if prov_sub == "set":
+            if not prov_rest:
+                conversation.notify("Usage: /onecode:config provider set <name>", title="/onecode:config provider set", severity="error")
+                return
+            cfg.default_provider = prov_rest
+            _save_cfg(cfg)
+            conversation.flash(f"onecode provider set to [b]{prov_rest}")
+            return
+
+        if prov_sub == "list":
+            from onecode.models.provider import ProviderRegistry
+            from onecode.models.registry import ModelRegistry
+            try:
+                from onecode.models import providers as _  # noqa: F401
+            except ImportError:
+                pass
+            try:
+                ModelRegistry.initialize()
+            except Exception:
+                pass
+            registered = sorted(ProviderRegistry.list())
+            current = cfg.default_provider
+            lines = [f"**Available providers** ({len(registered)}):\n"]
+            for i, name in enumerate(registered, 1):
+                marker = " ← active" if name == current else ""
+                try:
+                    models = ModelRegistry.list_by_provider(name)
+                except Exception:
+                    models = []
+                if models:
+                    model_names = sorted({m.id for m in models})
+                    shown = ", ".join(model_names[:5])
+                    if len(model_names) > 5:
+                        shown += f", … (+{len(model_names) - 5})"
+                    model_hint = f"  models: {shown}"
+                else:
+                    model_hint = "  models: (any local)"
+                lines.append(f"  `{i}) {name}`{marker}{model_hint}")
+            lines.append("\n*Switch with: `/onecode:config provider set <name>`*")
+            await _post(conversation, "\n".join(lines))
+            return
+
+        if prov_sub in ("api-key", "apikey", "key"):
+            key_parts = prov_rest.strip().split()
+            key_sub = key_parts[0].lower() if key_parts else ""
+            key_rest = " ".join(key_parts[1:]) if len(key_parts) > 1 else ""
+
+            if key_sub == "get":
+                if not key_rest:
+                    conversation.notify("Usage: /onecode:config provider api-key get <provider>", title="/onecode:config provider api-key get", severity="error")
+                    return
+                pcfg = cfg.providers.get(key_rest)
+                if pcfg:
+                    await _post(conversation, f"**{key_rest} api-key** = `{_mask_api_key(pcfg.api_key)}`")
+                else:
+                    await _post(conversation, f"**{key_rest} api-key** = `(not configured)`")
+                return
+
+            if key_sub == "set":
+                if len(key_parts) < 3:
+                    conversation.notify("Usage: /onecode:config provider api-key set <provider> <key>", title="/onecode:config provider api-key set", severity="error")
+                    return
+                provider_id = key_parts[1]
+                key_value = key_parts[2]
+                if provider_id not in cfg.providers:
+                    from onecode.config import ProviderConfig
+                    cfg.providers[provider_id] = ProviderConfig()
+                cfg.providers[provider_id].api_key = key_value
+                _save_cfg(cfg)
+                conversation.flash(f"onecode {provider_id} api-key set")
+                return
+
+            await _post(conversation, _HELP_CONFIG)
+            return
+
+        if prov_sub == "endpoint":
+            ep_parts = prov_rest.strip().split()
+            ep_sub = ep_parts[0].lower() if ep_parts else ""
+            ep_rest = " ".join(ep_parts[1:]) if len(ep_parts) > 1 else ""
+
+            if ep_sub == "get":
+                if not ep_rest:
+                    conversation.notify("Usage: /onecode:config provider endpoint get <provider>", title="/onecode:config provider endpoint get", severity="error")
+                    return
+                pcfg = cfg.providers.get(ep_rest)
+                if pcfg:
+                    ep = pcfg.endpoint or "(default)"
+                    await _post(conversation, f"**{ep_rest} endpoint** = `{ep}`")
+                else:
+                    await _post(conversation, f"**{ep_rest} endpoint** = `(not configured)`")
+                return
+
+            if ep_sub == "set":
+                if len(ep_parts) < 3:
+                    conversation.notify("Usage: /onecode:config provider endpoint set <provider> <url>", title="/onecode:config provider endpoint set", severity="error")
+                    return
+                provider_id = ep_parts[1]
+                ep_value = ep_parts[2]
+                if provider_id not in cfg.providers:
+                    from onecode.config import ProviderConfig
+                    cfg.providers[provider_id] = ProviderConfig()
+                cfg.providers[provider_id].endpoint = ep_value
+                _save_cfg(cfg)
+                conversation.flash(f"onecode {provider_id} endpoint set")
+                return
+
+            await _post(conversation, _HELP_CONFIG)
+            return
+
+        await _post(conversation, _HELP_CONFIG)
+        return
+
+    if sub == "log-level":
+        ll_parts = rest.strip().split()
+        ll_sub = ll_parts[0].lower() if ll_parts else ""
+        if ll_sub == "get" or ll_sub == "":
+            await _post(conversation, f"**log-level** = `{cfg.log_level}`  (debug | info | warn | error)")
+            return
+        if ll_sub == "set":
+            if len(ll_parts) < 2:
+                conversation.notify("Usage: /onecode:config log-level set <debug|info|warn|error>", title="/onecode:config log-level set", severity="error")
+                return
+            value = ll_parts[1]
+            if value not in ("debug", "info", "warn", "error"):
+                conversation.notify("Log level must be one of: debug, info, warn, error", title="/onecode:config log-level set", severity="error")
+                return
+            cfg.log_level = value
+            _save_cfg(cfg)
+            conversation.flash(f"onecode log-level set to [b]{value}")
+            return
+        await _post(conversation, _HELP_CONFIG)
+        return
+
+    await _post(conversation, _HELP_CONFIG)
+
+
+_HELP_CONFIG = (
+    "**/onecode:config** — manage onecode configuration\n\n"
+    "**Sub-commands**\n"
+    "- `(none)` or `tui` — open the TUI config editor\n"
+    "- `list` — show full YAML configuration (api-key masked)\n"
+    "- `mode get|set <build|plan|solo>`\n"
+    "- `model get|set <model-name>`\n"
+    "- `provider get|set <name>` — get/set default provider\n"
+    "- `provider list` — list all available providers\n"
+    "- `provider api-key get|set <provider> <key>` — manage provider api-key\n"
+    "- `provider endpoint get|set <provider> <url>` — manage provider endpoint\n"
+    "- `log-level get|set <debug|info|warn|error>`\n\n"
+    "**Examples**\n"
+    "- `/onecode:config` — open config editor\n"
+    "- `/onecode:config list` — show full config\n"
+    "- `/onecode:config mode set solo`\n"
+    "- `/onecode:config provider api-key set openai sk-xxx`\n"
+    "- `/onecode:config provider endpoint set openai https://api.openai.com/v1`"
+)
+
+
 # ── registration ──────────────────────────────────────────────────────
 
 
@@ -670,4 +909,10 @@ def register_commands() -> None:
         "Immediately compact context to reduce token usage",
         _compact,
         "(no args)",
+    )
+    platform_commands.register(
+        "config",
+        "Open config editor TUI, or manage mode/model/provider/api-key/endpoint/log-level",
+        _config,
+        "mode|model|provider|log-level [get|set <v>]",
     )
